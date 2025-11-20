@@ -46,3 +46,7 @@ coverage.xml
 # Misc
 logs/
 tmp/
+
+# Image cache
+image_cache/
+cache_metadata.json

@@ -1,15 +1,19 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from uuid import UUID
 from .model import ClickCount, GameSession, SessionDep, create_db_and_tables
 from .schemas import (
     StartGameResponse,
     ContinueGameRequest, ContinueGameResponse,
     GenerateArtRequest, GenerateArtResponse,
-    GenerateImageRequest, GenerateImageResponse
+    GenerateImageRequest, GenerateImageResponse,
+    GenerateVoiceRequest
 )
 from .ai_service import generate_initial_scene, generate_continuation, generate_art_description
-from .image_service import generate_image
+from .image_service import generate_image_with_cache, load_cache_metadata
+from .voice_service import generate_voice_stream
+from pathlib import Path
 
 
 app = FastAPI()
@@ -36,6 +40,34 @@ def _get_user_agent_ip(request: Request) -> str:
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
+
+
+@app.get("/api/cache/status")
+def get_cache_status():
+    """Get cache status and statistics."""
+    import os
+    
+    cache_metadata = load_cache_metadata()
+    project_root = Path(__file__).parent.parent.parent
+    cache_dir = project_root / "image_cache"
+    metadata_file = project_root / "cache_metadata.json"
+    
+    # Count actual image files
+    image_count = 0
+    total_size = 0
+    if cache_dir.exists():
+        for file in cache_dir.glob("img_*.png"):
+            if file.is_file():
+                image_count += 1
+                total_size += file.stat().st_size
+    
+    return {
+        "cache_entries": len(cache_metadata),
+        "image_files": image_count,
+        "total_size_mb": round(total_size / (1024 * 1024), 2),
+        "cache_directory": str(cache_dir),
+        "metadata_file_exists": metadata_file.exists()
+    }
 
 
 @app.get("/clickcount")
@@ -233,36 +265,16 @@ def generate_art(request: GenerateArtRequest, session: SessionDep):
 
 @app.post("/api/game/generate-image", response_model=GenerateImageResponse)
 def generate_scene_image(request: GenerateImageRequest):
-    """Generate an image for a scene using Freepik API."""
+    """Generate an image for a scene using Freepik API with semantic caching."""
     try:
-        result = generate_image(request.art_description, request.style_notes)
+        result = generate_image_with_cache(request.art_description, request.style_notes)
         
-        # Extract image from Freepik response
-        # The API returns base64-encoded images in the 'data' array
-        image_url = None
-        if isinstance(result, dict):
-            # Check for base64 image data (Freepik API format)
-            if "data" in result and isinstance(result["data"], list) and len(result["data"]) > 0:
-                first_image = result["data"][0]
-                if "base64" in first_image:
-                    # Convert base64 to data URL for frontend display
-                    base64_data = first_image["base64"]
-                    image_url = f"data:image/jpeg;base64,{base64_data}"
-                elif "url" in first_image:
-                    image_url = first_image["url"]
-                elif "image_url" in first_image:
-                    image_url = first_image["image_url"]
-            # Fallback to other possible formats
-            elif "url" in result:
-                image_url = result["url"]
-            elif "image_url" in result:
-                image_url = result["image_url"]
-            elif "images" in result and isinstance(result["images"], list) and len(result["images"]) > 0:
-                image_url = result["images"][0].get("url") or result["images"][0].get("image_url")
+        # Extract image URL from cached result
+        image_url = result.get("image_url")
         
         if not image_url:
             return GenerateImageResponse(
-                error=f"Could not extract image from response: {result}"
+                error="Could not generate or retrieve image"
             )
         
         return GenerateImageResponse(image_url=image_url)
@@ -270,3 +282,16 @@ def generate_scene_image(request: GenerateImageRequest):
         return GenerateImageResponse(
             error=str(e)
         )
+
+@app.post("/api/game/generate-voice")
+def generate_voice(request: GenerateVoiceRequest):
+    """
+    Generates a voice audio stream for the given text.
+    """
+    try:
+        return StreamingResponse(
+            generate_voice_stream(request.text, request.voice_id),
+            media_type="audio/mpeg"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

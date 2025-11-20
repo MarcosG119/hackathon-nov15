@@ -1,7 +1,10 @@
-import { useState } from 'react';
-import { startGame, continueGame, generateArt, generateImage } from './api';
+import { useState, useEffect, useRef } from 'react';
+import { startGame, continueGame, generateArt, generateImage, generateVoice } from './api';
 import type { StartGameResponse, ContinueGameResponse, GenerateArtResponse, Choice } from './types';
 import './App.css';
+
+// voice ID (can be changed)
+const VOICE_ID = "2ajXGJNYBR0iNHpS4VZb";
 
 function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -12,6 +15,79 @@ function App() {
   const [imageError, setImageError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  
+  // Ref to keep track of the current voice audio
+  const currentVoiceRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const audio = new Audio('/music.mp3');
+    audio.loop = true;
+    audio.volume = 0.1;
+    
+    const playAudio = async () => {
+      try {
+        await audio.play();
+      } catch (err) {
+        console.log("Autoplay prevented, waiting for interaction:", err);
+        const handleInteraction = () => {
+          audio.play();
+          document.removeEventListener('click', handleInteraction);
+          document.removeEventListener('keydown', handleInteraction);
+        };
+        document.addEventListener('click', handleInteraction);
+        document.addEventListener('keydown', handleInteraction);
+      }
+    };
+
+    playAudio();
+
+    return () => {
+      audio.pause();
+      audio.currentTime = 0;
+    };
+  }, []);
+
+  const playVoiceOver = async (text: string) => {
+    if (isMuted) return;
+    
+    try {
+      console.log("Generating voice for:", text);
+      // Stop any currently playing voice
+      if (currentVoiceRef.current) {
+        currentVoiceRef.current.pause();
+        currentVoiceRef.current = null;
+      }
+
+      const audioBlob = await generateVoice(text, VOICE_ID);
+      console.log("Voice blob received size:", audioBlob.size);
+      
+      if (audioBlob.size < 100) {
+        console.warn("Received unusually small audio blob, might be an error response.");
+        return;
+      }
+      
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      
+      audio.onerror = (e) => console.error("Audio playback error:", e);
+      audio.onplay = () => console.log("Audio started playing");
+      
+      currentVoiceRef.current = audio;
+      await audio.play();
+      
+      // Cleanup URL after playback
+      audio.onended = () => {
+        console.log("Audio playback finished");
+        URL.revokeObjectURL(audioUrl);
+        if (currentVoiceRef.current === audio) {
+          currentVoiceRef.current = null;
+        }
+      };
+    } catch (err) {
+      console.error("Failed to play voice over:", err);
+    }
+  };
 
   const handleStartGame = async () => {
     setLoading(true);
@@ -20,6 +96,9 @@ function App() {
       const response = await startGame();
       setSessionId(response.session_id);
       setGameState(response);
+      
+      // Start voice over for initial narrative
+      playVoiceOver(response.narrative);
       
       // Generate art for initial scene
       const art = await generateArt(response.session_id, response.scene_setting, response.narrative);
@@ -56,6 +135,9 @@ function App() {
       const response = await continueGame(sessionId, choice.id);
       setGameState(response);
       
+      // Start voice over for new narrative
+      playVoiceOver(response.narrative);
+      
       // Generate art if scene changed
       if (response.scene_changed) {
         const art = await generateArt(sessionId, response.scene_setting, response.narrative);
@@ -85,12 +167,27 @@ function App() {
   };
 
   const handleNewGame = () => {
+    // Stop any playing voice
+    if (currentVoiceRef.current) {
+      currentVoiceRef.current.pause();
+      currentVoiceRef.current = null;
+    }
     setSessionId(null);
     setGameState(null);
     setArtDescription(null);
     setSceneImage(null);
     setError(null);
     setImageError(null);
+  };
+
+  const toggleMute = () => {
+    setIsMuted(prev => {
+      const newState = !prev;
+      if (newState && currentVoiceRef.current) {
+        currentVoiceRef.current.pause();
+      }
+      return newState;
+    });
   };
 
   if (!gameState) {
@@ -159,6 +256,9 @@ function App() {
         <div className="top-menu-bar">
           <button className="menu-button" onClick={handleNewGame}>
             New Game
+          </button>
+          <button className="menu-button" onClick={toggleMute}>
+            {isMuted ? '🔇 Unmute Voice' : '🔊 Mute Voice'}
           </button>
         </div>
 

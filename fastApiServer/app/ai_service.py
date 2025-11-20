@@ -33,7 +33,7 @@ if not api_key:
     )
 
 client = OpenAI(api_key=api_key)
-model = "gpt-5-nano"
+model = "gpt-4o-mini"
 
 # Default characters for the game
 DEFAULT_CHARACTERS = [

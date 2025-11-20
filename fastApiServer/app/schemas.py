@@ -64,3 +64,7 @@ class GenerateImageResponse(BaseModel):
     image_url: Optional[str] = None
     error: Optional[str] = None
 
+
+class GenerateVoiceRequest(BaseModel):
+    text: str
+    voice_id: str

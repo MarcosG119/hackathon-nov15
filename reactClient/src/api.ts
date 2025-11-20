@@ -76,3 +76,21 @@ export async function generateImage(artDescription: string, styleNotes: string =
   return response.json();
 }
 
+export async function generateVoice(text: string, voiceId: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE_URL}/api/game/generate-voice`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      text: text,
+      voice_id: voiceId,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to generate voice: ${response.statusText}`);
+  }
+
+  return response.blob();
+}
